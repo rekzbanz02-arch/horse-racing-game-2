@@ -1,0 +1,608 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Horse Race — Multiplayer (Firebase optional)</title>
+  <style>
+    :root{
+      --bg:#0b1020; --panel:#0f1724; --accent:#ffb300; --muted:#98a0c7;
+      --track:#2b2f45; --finish:#d9534f;
+    }
+    *{box-sizing:border-box}
+    body{
+      margin:0; font-family:Inter,system-ui,Segoe UI,Roboto,Arial;
+      background:linear-gradient(180deg,var(--bg),#071026 120%);
+      color:#e8eefc; display:flex; align-items:flex-start; justify-content:center;
+      min-height:100vh; padding:18px;
+    }
+    .app {
+      width:100%; max-width:1100px; background:linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0.01));
+      border-radius:12px; padding:14px; box-shadow:0 6px 30px rgba(2,6,23,0.6);
+      display:grid; grid-template-columns: 1fr 360px; gap:14px;
+    }
+    @media (max-width:920px){ .app{ grid-template-columns:1fr; } }
+    .left { padding:10px; }
+    .right { padding:12px; background:rgba(0,0,0,0.06); border-radius:10px; }
+    header { display:flex; gap:10px; align-items:center; margin-bottom:8px; }
+    header h1 { font-size:18px; margin:0; }
+    .controls { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:10px; }
+    .btn {
+      background:var(--accent); color:#102030; border:none; padding:8px 12px; border-radius:8px; cursor:pointer; font-weight:700;
+      box-shadow:0 3px 8px rgba(0,0,0,0.4);
+    }
+    .btn.secondary { background:transparent; color:var(--muted); border:1px solid rgba(255,255,255,0.04); }
+    .small { padding:6px 8px; font-size:13px; }
+    canvas { width:100%; height:520px; background:linear-gradient(180deg,var(--track), #1d2438); border-radius:10px; display:block; }
+    .horses-list { display:grid; gap:6px; margin-top:8px; }
+    .horse-choice { display:flex; gap:10px; align-items:center; padding:10px; border-radius:8px; background:rgba(255,255,255,0.02); cursor:pointer; }
+    .horse-choice.selected { outline:3px solid rgba(255,179,0,0.12); background:linear-gradient(90deg, rgba(255,179,0,0.03), rgba(0,0,0,0)); }
+    .horse-swatch { width:40px; height:28px; border-radius:6px; display:flex; align-items:center; justify-content:center; font-weight:700; color:#071026;}
+    .info-line { font-size:13px; color:var(--muted); margin-bottom:8px; }
+    .status { margin-top:8px; font-size:14px; }
+    .players { font-size:13px; color:var(--muted); margin-top:8px; max-height:160px; overflow:auto; }
+    .footer-note { font-size:12px; color:var(--muted); margin-top:10px; }
+    .divider { height:1px; background:rgba(255,255,255,0.03); margin:8px 0; border-radius:2px; }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <div class="left">
+      <header>
+        <h1>🏇 Horse Race — 6 Horses (60s)</h1>
+        <div style="margin-left:auto;color:var(--muted);font-size:13px">Select a horse, then Start</div>
+      </header>
+
+      <div class="controls">
+        <button id="startBtn" class="btn">Start Race</button>
+        <button id="joinBtn" class="btn secondary small">Join Room</button>
+        <button id="createRoomBtn" class="btn secondary small">Create Room</button>
+        <button id="resetBtn" class="btn secondary small">Reset (local)</button>
+      </div>
+
+      <canvas id="trackCanvas" width="1000" height="520"></canvas>
+
+      <div style="display:flex; gap:10px; margin-top:10px;">
+        <div style="flex:1;">
+          <div class="info-line">Race time: <strong id="raceTime">40</strong> s</div>
+          <div class="info-line">Players in this room: <strong id="playersCount">1</strong></div>
+        </div>
+        <div style="width:220px; text-align:right;">
+          <div id="roomInfo" class="info-line">Mode: Local</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="right">
+      <div style="font-weight:700; font-size:15px;">Choose your horse</div>
+      <div class="horses-list" id="horseChoices"></div>
+
+      <div class="divider"></div>
+
+      <div class="status">
+        <div id="statusText">Status: Waiting</div>
+        <div id="winnerText" style="font-weight:800; margin-top:8px;"></div>
+      </div>
+
+      <div class="divider"></div>
+
+      <div style="font-weight:700; margin-bottom:6px;">Players</div>
+      <div class="players" id="playersList">
+        <div>No players yet (local)</div>
+      </div>
+
+      <div class="footer-note">
+        Tip: To enable multiplayer you must paste your Firebase config into the HTML and create/join the same room code.
+      </div>
+    </div>
+  </div>
+
+  <!-- Firebase SDK (optional): the code below expects modular SDK v9. If you don't want multiplayer, ignore. -->
+  <script type="module">
+  /***********************************************************************
+   *  Multiplayer design:
+   *   - If firebaseConfig is non-null, the page will try to connect
+   *     to Firebase Realtime Database and enable rooms.
+   *   - The first person to create the room becomes "host" - host writes
+   *     the random seed and raceStart timestamp into DB.
+   *   - All clients read the seed and synchronize animation using that seed.
+   *
+   *  Where to paste your Firebase config: replace the firebaseConfig object
+   *  below with the one from your Firebase console (web app).
+   *
+   *  If firebaseConfig is null, the page runs local single-device mode.
+   ***********************************************************************/
+
+  // ======= PASTE YOUR FIREBASE CONFIG OBJECT HERE =======
+  // Example: const firebaseConfig = { apiKey: "...", authDomain: "...", databaseURL: "...", projectId: "...", ... };
+  const firebaseConfig = {
+  apiKey: "AIzaSyD-ODfGlZdFxFjMGD-jcOhGGBL9z-FjhAA",
+  authDomain: "horseracing-662ec.firebaseapp.com",
+  databaseURL: "https://horseracing-662ec-default-rtdb.firebaseio.com",
+  projectId: "horseracing-662ec",
+  storageBucket: "horseracing-662ec.appspot.com",
+  messagingSenderId: "602340236424",
+  appId: "1:602340236424:web:2fb1ca46c73df48712933d"
+};
+ // <- set to your object to enable multiplayer
+  // =====================================================
+
+  // Basic utils
+  function qs(sel){return document.querySelector(sel)}
+  function el(tag, attrs = {}) { const e = document.createElement(tag); Object.assign(e, attrs); return e; }
+
+  // Seeded RNG (mulberry32)
+  function mulberry32(a) {
+    return function() {
+      a |= 0; a = a + 0x6D2B79F5 | 0;
+      var t = Math.imul(a ^ a >>> 15, 1 | a);
+      t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+      return ((t ^ t >>> 14) >>> 0) / 4294967296;
+    }
+  }
+
+  // DOM refs
+  const canvas = qs('#trackCanvas');
+  const ctx = canvas.getContext('2d', { alpha: false });
+  const startBtn = qs('#startBtn');
+  const createRoomBtn = qs('#createRoomBtn');
+  const joinBtn = qs('#joinBtn');
+  const resetBtn = qs('#resetBtn');
+  const horseChoices = qs('#horseChoices');
+  const statusText = qs('#statusText');
+  const winnerText = qs('#winnerText');
+  const playersList = qs('#playersList');
+  const playersCountEl = qs('#playersCount');
+  const raceTimeEl = qs('#raceTime');
+  const roomInfo = qs('#roomInfo');
+
+  // Race constants
+  const HORSE_COUNT = 6;
+  const RACE_SECONDS = 40; // single race duration
+  const TRACK_PADDING = 28;
+  const TRACK_HEIGHT = canvas.height - TRACK_PADDING*2;
+  let finishX = canvas.width - 140;
+
+  // State
+  let selectedHorse = 1;
+  let horses = []; // each {id,color,name,progress}
+  let animationId = null;
+  let running = false;
+  let startAt = null; // unix ms when race started
+  let seed = null;
+  let rng = null;
+  let seedOwnerId = null;
+  let mode = 'local'; // or 'multiplayer'
+  let roomId = null;
+  let clientId = 'c' + Math.floor(Math.random()*1e9);
+  let players = {}; // clientId -> {name, horse}
+  let firebaseApp = null;
+  let db = null;
+  let roomRef = null;
+  let isHost = false;
+
+  // Predefined colors
+  const colors = ['#f87171','#fb923c','#fbbf24','#34d399','#60a5fa','#a78bfa'];
+
+  // Build horses UI
+  function buildHorseChoices(){
+    horseChoices.innerHTML = '';
+    for(let i=1;i<=HORSE_COUNT;i++){
+      const r = el('div',{className:'horse-choice' + (i===selectedHorse?' selected':'')});
+      const sw = el('div',{className:'horse-swatch', innerText:i});
+      sw.style.background = colors[i-1];
+      const name = el('div',{innerHTML:`Horse <strong>#${i}</strong>`, style:'font-size:14px;'});
+      r.appendChild(sw); r.appendChild(name);
+      r.onclick = ()=> {
+        selectedHorse = i;
+        updateSelectionUI();
+        players[clientId] = {name: clientId, horse: selectedHorse};
+        broadcastPlayerUpdate();
+      };
+      horseChoices.appendChild(r);
+    }
+  }
+  function updateSelectionUI(){
+    [...horseChoices.children].forEach((c,idx)=>{
+      c.classList.toggle('selected', idx+1 === selectedHorse);
+    });
+  }
+
+  // Initialize horses array for animation
+  function prepareHorses(){
+    horses = [];
+    for(let i=0;i<HORSE_COUNT;i++){
+      horses.push({
+        id: i+1,
+        color: colors[i],
+        y: TRACK_PADDING + (i + 0.5) * (TRACK_HEIGHT / HORSE_COUNT) - 18,
+        progress: 0, // 0..1
+        leadFactor: 0, // dynamic factor to create lead changes
+      });
+    }
+  }
+
+  // Draw track + horses
+  function draw(nowTime){
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    // draw lanes
+    for(let i=0;i<HORSE_COUNT;i++){
+      const y = TRACK_PADDING + i*(TRACK_HEIGHT/HORSE_COUNT);
+      ctx.fillStyle = 'rgba(0,0,0,0.08)';
+      ctx.fillRect(0, y+6, canvas.width, (TRACK_HEIGHT/HORSE_COUNT)-12);
+      // lane separator
+      ctx.strokeStyle = 'rgba(255,255,255,0.03)';
+      ctx.beginPath(); ctx.moveTo(20,y+(TRACK_HEIGHT/HORSE_COUNT)); ctx.lineTo(canvas.width-20,y+(TRACK_HEIGHT/HORSE_COUNT)); ctx.stroke();
+    }
+    // finish line
+    ctx.fillStyle = 'rgba(255,255,255,0.06)';
+    ctx.fillRect(finishX, 0, 6, canvas.height);
+    ctx.fillStyle = 'rgba(255,255,255,0.02)';
+    ctx.fillRect(finishX+6, 0, 8, canvas.height);
+
+    // horses
+    for(let h of horses){
+      const x = 40 + h.progress * (finishX - 120);
+      // horse body (rounded rect)
+      roundRect(ctx, x, h.y, 110, 36, 10, h.color);
+      // jockey flag
+      ctx.fillStyle = 'rgba(0,0,0,0.12)';
+      ctx.fillRect(x+72, h.y-6, 18, 10);
+      // horse number
+      ctx.fillStyle = '#071026';
+      ctx.font = 'bold 14px Inter, sans-serif';
+      ctx.fillText('#'+h.id, x+10, h.y+22);
+      // small speed trail
+      ctx.fillStyle = 'rgba(255,255,255,0.03)';
+      ctx.fillRect(x-18, h.y+28, Math.min(40, (h.progress*40)), 4);
+    }
+    // HUD: time
+    ctx.fillStyle = '#fff';
+    ctx.font = '700 18px Inter, sans-serif';
+    const elapsed = running && startAt ? Math.max(0, (Date.now() - startAt)/1000) : 0;
+    const left = Math.max(0, RACE_SECONDS - elapsed).toFixed(1);
+    ctx.fillText(`Time Left: ${left}s`, canvas.width - 220, 30);
+  }
+
+  function roundRect(ctx, x, y, w, h, r, fillColor){
+    ctx.beginPath();
+    ctx.moveTo(x+r, y);
+    ctx.arcTo(x+w, y, x+w, y+h, r);
+    ctx.arcTo(x+w, y+h, x, y+h, r);
+    ctx.arcTo(x, y+h, x, y, r);
+    ctx.arcTo(x, y, x+w, y, r);
+    ctx.closePath();
+    ctx.fillStyle = fillColor;
+    ctx.fill();
+  }
+
+  // Simulation: each frame update horse.progress based on deterministic RNG and per-horse profile
+  function simulateFrame(timeNow){
+    if(!running) return;
+    const now = Date.now();
+    const t = Math.min(RACE_SECONDS, (now - startAt)/1000);
+    // normalized progress for time t -> 0..1 as baseline (linear)
+    const baseline = t / RACE_SECONDS;
+
+    // Use seeded RNG per frame to produce small jitter but deterministic
+    // We'll create a new RNG per horse derived from seed + horse id
+    for(let h of horses){
+      const localRng = mulberry32((seed >>> 0) + h.id*9973);
+      // base offset: each horse has slight unique profile
+      const profile = 0.85 + 0.3 * ( ( (h.id*37) % 10 ) / 10 ); // 0.85..1.15
+      // jitter that forms lead changes: use sin + random wiggle based on time
+      const jitter = Math.sin((t*1.8) + h.id) * (0.035 * localRng()) + (localRng()-0.5)*0.035;
+      // final progress biased by profile and winner bias later
+      h.progress = clamp((baseline * profile) + (jitter * 1.1), 0, 1.0);
+    }
+
+    // Ensure the preselected "random winner" wins: if a winner index exists, slightly bias it progressively
+    if(typeof raceWinnerId === 'number'){
+      // apply gentle bias to winner so it tends to lead near the end
+      for(let h of horses){
+        if(h.id === raceWinnerId){
+          // bias scales with time: small at start, stronger near end
+          const bias = Math.pow(baseline, 2) * 0.18; // up to ~0.18
+          h.progress = clamp(h.progress + bias, 0, 1);
+        }
+      }
+    }
+
+    draw(now);
+    // Check finish after RACE_SECONDS or whichever horse reached progress>=1
+    if((now - startAt) >= RACE_SECONDS*1000){
+      endRace();
+      return;
+    }
+    // also if any horse crosses >0.995 near end, consider finished slightly earlier
+    if(horses.some(h=>h.progress>=0.999) && (now - startAt) > 1000 ){
+      // let it run to the end time to keep 60s length; do not auto-end too early
+    }
+
+    animationId = requestAnimationFrame(simulateFrame);
+  }
+
+  function clamp(v,a,b){ return Math.max(a, Math.min(b, v)); }
+
+  // race control
+  let raceWinnerId = null;
+  function startRace(asHostTriggered=false){
+    if(running) return;
+    // if multiplayer and host: compute seed and winner and publish; otherwise wait for host's seed
+    if(mode === 'multiplayer' && firebaseConfig && isHost && !seed){
+      seed = Math.floor(Math.random()*0xFFFFFF);
+      raceWinnerId = Math.floor(seed % HORSE_COUNT) + 1; // random winner 1..6
+      writeRoom({ seed, raceWinner: raceWinnerId, startAt: Date.now() + 3000 }); // small 3s countdown
+      statusText.innerText = 'Status: Host scheduled race (3s countdown)';
+      return;
+    }
+    // local mode or seed already known
+    if(!seed){
+      // deterministic fallback: random seed per client
+      seed = Math.floor(Math.random()*0xFFFFFF);
+      raceWinnerId = Math.floor(seed % HORSE_COUNT) + 1;
+    }
+    rng = mulberry32(seed);
+    prepareHorses();
+    running = true;
+    startAt = Date.now();
+    statusText.innerText = 'Status: Racing!';
+    winnerText.innerText = '';
+    animationId = requestAnimationFrame(simulateFrame);
+  }
+
+  function endRace(){
+    if(!running) return;
+    running = false;
+    if(animationId) cancelAnimationFrame(animationId);
+    // determine winner by highest progress (in case bias led to same)
+    let best = horses.reduce((a,b)=> a.progress>b.progress? a:b, horses[0]);
+    // winner is raceWinnerId (we biased toward it), but choose best if tie
+    const winner = raceWinnerId || best.id;
+    statusText.innerText = 'Status: Finished';
+    winnerText.innerText = `🏆 Winner: Horse #${winner}`;
+    highlightWinner(winner);
+    // publish winner in multiplayer
+    if(mode==='multiplayer' && firebaseConfig && roomRef){
+      writeRoom({ lastWinner: winner, finishedAt: Date.now() });
+    }
+  }
+
+  function highlightWinner(winnerId){
+    // highlight winner rectangle at top
+    for(let h of horses){
+      if(h.id === winnerId){
+        // small confetti-like animation: draw some stars around it
+        const x = 40 + h.progress * (finishX - 120);
+        // draw simple confetti once
+        ctx.save();
+        ctx.fillStyle = 'rgba(255,255,255,0.9)';
+        for(let i=0;i<14;i++){
+          ctx.fillRect(x + (Math.random()*120)-60, h.y + (Math.random()*-40), 4,4);
+        }
+        ctx.restore();
+      }
+    }
+  }
+
+  // UI handlers
+  startBtn.addEventListener('click', ()=>{
+    if(mode==='multiplayer' && firebaseConfig && !roomId){
+      alert('Create or join a room to start multiplayer races.');
+      return;
+    }
+    if(mode==='multiplayer' && firebaseConfig && !isHost){
+      alert('Only the host can start the race. Create a room or ask host to start.');
+      return;
+    }
+    // in multiplayer host triggers seed+start; in local we start immediately
+    if(mode==='multiplayer' && firebaseConfig && isHost){
+      startRace(true);
+    } else {
+      // local start: write seed/winner locally and start immediately
+      seed = Math.floor(Math.random()*0xFFFFFF);
+      raceWinnerId = Math.floor(seed % HORSE_COUNT) + 1;
+      startRace();
+    }
+  });
+
+  resetBtn.addEventListener('click', ()=>{
+    if(animationId) cancelAnimationFrame(animationId);
+    running=false; seed=null; raceWinnerId=null; startAt=null;
+    statusText.innerText = 'Status: Waiting';
+    winnerText.innerText = '';
+    prepareHorses(); draw();
+  });
+
+  // Room creation: simple random room code
+  createRoomBtn.addEventListener('click', async ()=>{
+    if(!firebaseConfig){
+      alert('To use multiplayer paste your Firebase config into the HTML (see top comments).');
+      return;
+    }
+    const code = prompt('Choose a short room code (or leave blank to get random):') || Math.random().toString(36).slice(2,7).toUpperCase();
+    await createRoom(code.toUpperCase());
+  });
+
+  joinBtn.addEventListener('click', async ()=>{
+    if(!firebaseConfig){
+      alert('To use multiplayer paste your Firebase config into the HTML (see top comments).');
+      return;
+    }
+    const code = prompt('Enter room code:');
+    if(!code) return;
+    await joinRoom(code.toUpperCase());
+  });
+
+  // Simple UI player list
+  function updatePlayersListUI(){
+    playersList.innerHTML = '';
+    const list = Object.values(players);
+    playersCountEl.innerText = list.length;
+    if(list.length===0){ playersList.innerHTML = '<div>No players</div>'; return;}
+    for(let p of list){
+      const d = el('div', { style:'display:flex;gap:8px;align-items:center;padding:6px;border-radius:6px;background:rgba(255,255,255,0.01);margin-bottom:6px' });
+      const sw = el('div',{style:`width:34px;height:24px;border-radius:6px;background:${colors[(p.horse-1)%colors.length]};display:flex;align-items:center;justify-content:center;color:#071026;font-weight:800`, innerText:p.horse});
+      const nm = el('div',{innerHTML:`<strong>${p.name}</strong><div style="font-size:12px;color:var(--muted)">Horse #${p.horse}</div>`});
+      d.appendChild(sw); d.appendChild(nm);
+      playersList.appendChild(d);
+    }
+  }
+
+  // Broadcast player selection update (multiplayer)
+  async function broadcastPlayerUpdate(){
+    if(mode!=='multiplayer' || !firebaseConfig || !roomRef) return;
+    const payload = { playersKey: clientId, name: clientId, horse: selectedHorse, ts: Date.now() };
+    try{
+      // write to /rooms/<roomId>/players/<clientId>
+      await setRoomChild(`players/${clientId}`, payload);
+    }catch(e){
+      console.warn('player update err',e);
+    }
+  }
+
+  /*********************** Firebase integration *************************/
+  // We purposely load Firebase SDK conditionally so local mode remains dependency-free
+  if(firebaseConfig){
+    // dynamic imports
+    try {
+      const mod = await import('https://www.gstatic.com/firebasejs/9.23.0/firebase-app.js');
+      const dbmod = await import('https://www.gstatic.com/firebasejs/9.23.0/firebase-database.js');
+      firebaseApp = mod.initializeApp(firebaseConfig);
+      db = dbmod.getDatabase(firebaseApp);
+      console.log('Firebase loaded');
+      mode = 'multiplayer';
+      roomInfo.innerText = 'Mode: Multiplayer (not in room)';
+    } catch(e){
+      console.warn('Failed to load Firebase SDK. Multiplayer disabled.', e);
+      mode = 'local';
+      roomInfo.innerText = 'Mode: Local (firebase load failed)';
+    }
+  } else {
+    mode = 'local';
+    roomInfo.innerText = 'Mode: Local';
+  }
+
+  // Helper to write entire room state
+  async function writeRoom(obj){
+    if(!db || !roomId) return;
+    const { set, ref, update } = await import('https://www.gstatic.com/firebasejs/9.23.0/firebase-database.js');
+    const r = ref(db, `rooms/${roomId}`);
+    await update(r, obj);
+  }
+
+  // helper set child path
+  async function setRoomChild(path, value){
+    if(!db || !roomId) return;
+    const { ref, set } = await import('https://www.gstatic.com/firebasejs/9.23.0/firebase-database.js');
+    const r = ref(db, `rooms/${roomId}/${path}`);
+    await set(r, value);
+  }
+
+  // create room
+  async function createRoom(code){
+    if(!db) return alert('Realtime DB not configured properly.');
+    roomId = code;
+    isHost = true;
+    // initial room content
+    const { ref, set, onValue } = await import('https://www.gstatic.com/firebasejs/9.23.0/firebase-database.js');
+    const r = ref(db, `rooms/${roomId}`);
+    roomRef = r;
+    await set(r, {
+      createdAt: Date.now(),
+      host: clientId,
+      seed: null,
+      raceWinner: null,
+      players: { [clientId]: { name: clientId, horse: selectedHorse, ts: Date.now() } }
+    });
+    players[clientId] = { name: clientId, horse: selectedHorse };
+    updatePlayersListUI();
+    roomInfo.innerText = `Mode: Multiplayer — Room ${roomId} (host)`;
+    listenRoom();
+    alert(`Room created: ${roomId}\nShare this code with other players to join.`);
+  }
+
+  // join room
+  async function joinRoom(code){
+    if(!db) return alert('Realtime DB not configured properly.');
+    roomId = code;
+    isHost = false;
+    const { ref, get, child, onValue, set } = await import('https://www.gstatic.com/firebasejs/9.23.0/firebase-database.js');
+    const dbRef = ref(db);
+    const snapshot = await get(child(dbRef, `rooms/${roomId}`));
+    if(!snapshot.exists()){
+      return alert('Room not found: ' + roomId);
+    }
+    // write self to players list
+    const playerData = { name: clientId, horse: selectedHorse, ts: Date.now() };
+    await set(ref(db, `rooms/${roomId}/players/${clientId}`), playerData);
+    players[clientId] = { name: clientId, horse: selectedHorse };
+    updatePlayersListUI();
+    roomInfo.innerText = `Mode: Multiplayer — Room ${roomId}`;
+    listenRoom();
+  }
+
+  // Listen to room events (players join/leave, seed/start)
+  async function listenRoom(){
+    if(!db || !roomId) return;
+    const { ref, onValue, get, child } = await import('https://www.gstatic.com/firebasejs/9.23.0/firebase-database.js');
+    const r = ref(db, `rooms/${roomId}`);
+    onValue(r, (snap)=>{
+      const data = snap.val();
+      if(!data) return;
+      // players
+      if(data.players){
+        players = {};
+        for(const [k,v] of Object.entries(data.players)){
+          players[k] = { name: v.name || k, horse: v.horse || 1 };
+        }
+        updatePlayersListUI();
+      }
+      // seed and start
+      if(data.seed && !seed){
+        seed = data.seed;
+        raceWinnerId = data.raceWinner;
+        rng = mulberry32(seed);
+        // if host scheduled startAt in future, wait until that time; else start immediately
+        if(data.startAt){
+          const delay = Math.max(0, data.startAt - Date.now());
+          statusText.innerText = `Status: Starting in ${Math.ceil(delay/1000)}s`;
+          setTimeout(()=> {
+            // sync startAt to published timestamp
+            startAt = data.startAt;
+            running = true;
+            animationId = requestAnimationFrame(simulateFrame);
+            statusText.innerText = 'Status: Racing!';
+          }, delay);
+        } else {
+          // immediate start
+          startAt = Date.now();
+          running = true;
+          animationId = requestAnimationFrame(simulateFrame);
+          statusText.innerText = 'Status: Racing!';
+        }
+      }
+      // if host wrote lastWinner
+      if(data.lastWinner){
+        winnerText.innerText = `🏆 Winner: Horse #${data.lastWinner}`;
+      }
+    });
+  }
+
+  // on page load
+  (function init(){
+    prepareHorses();
+    buildHorseChoices();
+    updateSelectionUI();
+    // register self in players map (local)
+    players[clientId] = {name: clientId, horse: selectedHorse};
+    updatePlayersListUI();
+    draw();
+  })();
+
+  // Utility: update players count when local
+  setInterval(()=>{ if(mode==='local') playersCountEl.innerText = Object.keys(players).length; }, 2000);
+
+  </script>
+</body>
+</html>
