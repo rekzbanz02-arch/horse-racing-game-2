@@ -49,7 +49,7 @@
   <div class="app">
     <div class="left">
       <header>
-        <h1>🏇 Horse Race — 6 Horses (60s)</h1>
+        <h1>🏇 Horse Race — 6 Horses (40s)</h1>
         <div style="margin-left:auto;color:var(--muted);font-size:13px">Select a horse, then Start</div>
       </header>
 
@@ -451,7 +451,8 @@
 
   // Broadcast player selection update (multiplayer)
   async function broadcastPlayerUpdate(){
-    if(mode!=='multiplayer' || !firebaseConfig || !roomRef) return;
+    // allow broadcast without roomRef strict dependency
+    if(mode!=='multiplayer' || !firebaseConfig || !db || !roomId) return;
     const payload = { playersKey: clientId, name: clientId, horse: selectedHorse, ts: Date.now() };
     try{
       // write to /rooms/<roomId>/players/<clientId>
@@ -507,7 +508,7 @@
     // initial room content
     const { ref, set, onValue } = await import('https://www.gstatic.com/firebasejs/9.23.0/firebase-database.js');
     const r = ref(db, `rooms/${roomId}`);
-    roomRef = r;
+    roomRef = r; // keep a reference for host-specific writes
     await set(r, {
       createdAt: Date.now(),
       host: clientId,
@@ -533,6 +534,10 @@
     if(!snapshot.exists()){
       return alert('Room not found: ' + roomId);
     }
+
+    // set roomRef here so joined clients can use it too
+    roomRef = ref(db, `rooms/${roomId}`);
+
     // write self to players list
     const playerData = { name: clientId, horse: selectedHorse, ts: Date.now() };
     await set(ref(db, `rooms/${roomId}/players/${clientId}`), playerData);
